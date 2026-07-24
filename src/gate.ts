@@ -16,6 +16,7 @@ import { getDropConfig, setDropConfig } from "./queue/config.ts"
 import { heartbeat, release } from "./queue/session.ts"
 import { requirePass } from "./middleware/require-pass.ts"
 import { ipRateLimit } from "./middleware/rate-limit-ip.ts"
+import { verifyTurnstile, turnstileEnabled } from "./lib/turnstile.ts"
 import { cmd } from "./lib/redis.ts"
 
 const TICKET_COOKIE = "wr_ticket"
@@ -46,6 +47,16 @@ const enqueueRateLimit = ipRateLimit("enqueue", {
 
 app.post("/api/:dropId/enqueue", enqueueRateLimit, async (c) => {
   const dropId = c.req.param("dropId")!
+
+  // Anti-bot: one Turnstile challenge per queue entry. This is what neutralizes
+  // lottery farming — flooding entries now costs a human/proof challenge each.
+  if (turnstileEnabled()) {
+    const body = (await c.req.json().catch(() => ({}))) as { turnstileToken?: string }
+    const token = body.turnstileToken ?? c.req.header("cf-turnstile-response") ?? ""
+    if (!(await verifyTurnstile(token))) {
+      return c.json({ error: "turnstile_failed", redirect: `/drop/${dropId}` }, 403)
+    }
+  }
 
   // Idempotent: a valid existing ticket keeps its place.
   const existing = await readTicket(c, dropId)

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createProvider, currentMode, type QueueMode, type QueueUpdate } from "@/queue"
 
-export type QueuePhase = "joining" | "waiting" | "admitted" | "entered" | "error"
+export type QueuePhase = "challenge" | "joining" | "waiting" | "admitted" | "entered" | "error"
 
 export type QueueState = {
   phase: QueuePhase
@@ -15,15 +15,34 @@ export type QueueState = {
   error?: string
 }
 
+// Turnstile gates enqueue in self mode when a sitekey is configured.
+const SITEKEY = import.meta.env.VITE_WR_TURNSTILE_SITEKEY as string | undefined
+const NEEDS_TURNSTILE = currentMode() === "self" && !!SITEKEY
+
+export type UseQueue = QueueState & {
+  retry: () => void
+  /** Present when a Turnstile challenge must be solved before joining. */
+  sitekey?: string
+  /** Called by the UI with the Turnstile token to proceed with enqueue. */
+  solve: (token: string) => void
+}
+
 /**
  * Drives one visitor through the queue for `dropId`, against whichever provider
  * VITE_WR_MODE selects (variant A self-hosted, or variant B Cloudflare):
- *   join → live updates (or polling) → on admission, redeem on the real site.
+ *   [challenge] → join → live updates (or polling) → redeem on the real site.
  */
-export function useQueue(dropId: string): QueueState & { retry: () => void } {
+export function useQueue(dropId: string): UseQueue {
   const provider = useMemo(() => createProvider(dropId), [dropId])
   const initialState: QueueState = useMemo(
-    () => ({ phase: "joining", mode: currentMode(), position: 0, eta: 0, progress: 0, live: false }),
+    () => ({
+      phase: NEEDS_TURNSTILE ? "challenge" : "joining",
+      mode: currentMode(),
+      position: 0,
+      eta: 0,
+      progress: 0,
+      live: false,
+    }),
     [],
   )
 
@@ -38,8 +57,6 @@ export function useQueue(dropId: string): QueueState & { retry: () => void } {
   const patch = useCallback((p: Partial<QueueState>) => setState((s) => ({ ...s, ...p })), [])
 
   const computeProgress = useCallback((pos: number) => {
-    // Anchor to the worst position ever seen so an up-ticking position (late
-    // arrivals, races) never yields a negative bar.
     initialPos.current = Math.max(initialPos.current, pos)
     const start = initialPos.current
     if (start <= 1) return 100
@@ -97,30 +114,48 @@ export function useQueue(dropId: string): QueueState & { retry: () => void } {
     }, 5000)
   }, [apply, patch, provider])
 
-  const join = useCallback(async () => {
+  // Enter the queue. In self+Turnstile mode a token is required.
+  const join = useCallback(
+    async (turnstileToken?: string) => {
+      initialPos.current = 0
+      settled.current = false
+      patch({ phase: "joining" })
+      try {
+        const { position } = await provider.join(turnstileToken)
+        patch({ phase: "waiting", position, progress: computeProgress(position) })
+        if (provider.supportsLive) {
+          patch({ live: true })
+          unsubRef.current = provider.subscribe(apply, startPolling)
+        } else {
+          startPolling()
+          void provider.poll().then(apply).catch(() => {})
+        }
+      } catch {
+        patch({ phase: "error", error: "Échec de l'entrée en file." })
+      }
+    },
+    [apply, computeProgress, patch, provider, startPolling],
+  )
+
+  // Reset to the starting phase: a challenge to solve, or straight to join.
+  const start = useCallback(() => {
+    stopChannels()
     setState(initialState)
     initialPos.current = 0
     settled.current = false
-    try {
-      const { position } = await provider.join()
-      patch({ phase: "waiting", position, progress: computeProgress(position) })
-      if (provider.supportsLive) {
-        patch({ live: true })
-        unsubRef.current = provider.subscribe(apply, startPolling)
-      } else {
-        startPolling()
-        void provider.poll().then(apply).catch(() => {}) // immediate first read
-      }
-    } catch {
-      patch({ phase: "error", error: "Échec de l'entrée en file." })
-    }
-  }, [apply, computeProgress, initialState, patch, provider, startPolling])
+    if (!NEEDS_TURNSTILE) void join()
+  }, [initialState, join, stopChannels])
 
   useEffect(() => {
-    void join()
+    start()
     return stopChannels
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dropId])
 
-  return { ...state, retry: join }
+  return {
+    ...state,
+    retry: start,
+    sitekey: NEEDS_TURNSTILE ? SITEKEY : undefined,
+    solve: (token: string) => void join(token),
+  }
 }

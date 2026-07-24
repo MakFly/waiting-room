@@ -15,8 +15,11 @@ export interface QueueProvider {
   readonly mode: "self" | "cloudflare"
   /** True when the provider can push updates; false ⇒ the hook polls instead. */
   readonly supportsLive: boolean
-  /** Enter the queue. Returns the initial position (0 when unknown, e.g. CF). */
-  join(): Promise<{ position: number }>
+  /**
+   * Enter the queue. Returns the initial position (0 when unknown, e.g. CF).
+   * `turnstileToken` is forwarded to the gate in self mode (anti-bot).
+   */
+  join(turnstileToken?: string): Promise<{ position: number }>
   /** Live channel. No-op (returns a no-op unsub) when !supportsLive. */
   subscribe(onUpdate: (u: QueueUpdate) => void, onError: () => void): () => void
   /** One-shot status read, used for the polling fallback and for CF. */

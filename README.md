@@ -64,9 +64,24 @@ curl -s -H "Authorization: Bearer <pass>" $B/api/$D/site    # protected "real si
   JWT **and** membership in `admitted` (immediate revocation on release).
 - **Fairness**: `method=lottery` shuffles arrivals within a **time window** (being a
   few ms earlier gives no edge; anti refresh-spam).
-- **Anti-bot**: **per-IP rate limit** on `/enqueue` (Lua token bucket) that caps how
-  many tickets one client can create → no farming of lottery entries.
+- **Anti-bot**: **per-IP rate limit** on `/enqueue` (Lua token bucket) + optional
+  **Cloudflare Turnstile** challenge per queue entry (server-side siteverify). A
+  lottery is only fair if each entry is costly — Turnstile is what stops a bot from
+  flooding N entries to farm a top position.
 - **Redis isolation**: all keys under the `wr:` prefix (never `pulseops:*`).
+
+### Anti-bot: Turnstile (optional)
+Set `WR_TURNSTILE_SECRET` on the gate and `VITE_WR_TURNSTILE_SITEKEY` on the web
+app to require a Turnstile challenge before every enqueue (self mode; in variant B
+Cloudflare handles bots at the edge). The gate verifies the token server-side
+against Cloudflare siteverify — the browser never calls siteverify. Cloudflare
+test keys let you wire and validate it without a real widget:
+
+| | sitekey (web) | secret (gate) |
+|---|---|---|
+| always pass | `1x00000000000000000000AA` | `1x0000000000000000000000000000000AA` |
+| always block | `2x00000000000000000000AB` | `2x0000000000000000000000000000000AA` |
+| force interactive | `3x00000000000000000000FF` | — |
 
 ### Hot config (ops)
 ```bash

@@ -43,8 +43,9 @@ export function createCloudflareProvider(): QueueProvider {
     mode: "cloudflare",
     supportsLive: false, // Cloudflare has no push channel — poll only.
 
-    async join() {
+    async join(_turnstileToken?: string) {
       // Merely landing on the URL enrolls the visitor (edge sets the cookie).
+      // Cloudflare handles bot mitigation at the edge, so no token is used here.
       return { position: 0 }
     },
 

@@ -1,5 +1,6 @@
-import { Loader2, CheckCircle2, Users, Clock, Wifi, WifiOff, PartyPopper } from "lucide-react"
+import { Loader2, CheckCircle2, Users, Clock, Wifi, WifiOff, PartyPopper, ShieldCheck } from "lucide-react"
 import { useQueue } from "@/hooks/useQueue"
+import { Turnstile } from "@/components/Turnstile"
 import {
   Card,
   CardContent,
@@ -41,6 +42,15 @@ export default function WaitingRoom() {
         </CardHeader>
 
         <CardContent className="space-y-6">
+          {q.phase === "challenge" && q.sitekey && (
+            <div className="space-y-4" aria-live="polite">
+              <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                <ShieldCheck className="h-4 w-4" /> Vérification anti-bot avant l'entrée en file
+              </div>
+              <Turnstile sitekey={q.sitekey} onVerify={q.solve} />
+            </div>
+          )}
+
           {q.phase === "joining" && (
             <div className="flex items-center gap-2 text-muted-foreground" aria-live="polite">
               <Loader2 className="h-4 w-4 animate-spin" /> Entrée en file…

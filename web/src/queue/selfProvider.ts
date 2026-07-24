@@ -8,8 +8,13 @@ export function createSelfProvider(dropId: string): QueueProvider {
     mode: "self",
     supportsLive: true,
 
-    async join() {
-      const r = await fetch(`/api/${dropId}/enqueue`, { method: "POST" })
+    async join(turnstileToken?: string) {
+      const r = await fetch(`/api/${dropId}/enqueue`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(turnstileToken ? { turnstileToken } : {}),
+      })
+      if (!r.ok) throw new Error(`enqueue failed: ${r.status}`)
       const s = await r.json()
       return { position: s.position ?? 0 }
     },

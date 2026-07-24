@@ -19,6 +19,11 @@ const EnvSchema = z.object({
   WR_ENQUEUE_RL_REFILL_MS: z.coerce.number().int().positive().default(60_000),
   // Lottery time window (ms): arrivals in the same window are shuffled together.
   WR_LOTTERY_WINDOW_MS: z.coerce.number().int().positive().default(2_000),
+  // Cloudflare Turnstile secret. When set, /enqueue requires a valid token
+  // (anti-bot: a human/proof cost per queue entry). Unset ⇒ Turnstile disabled.
+  // Dev/test keys: pass "1x0000000000000000000000000000000AA",
+  //                fail "2x0000000000000000000000000000000AA".
+  WR_TURNSTILE_SECRET: z.string().optional(),
 })
 
 export type Env = z.infer<typeof EnvSchema>
