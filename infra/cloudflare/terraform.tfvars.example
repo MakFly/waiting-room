@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and fill in. Never commit the real file.
+cloudflare_api_token = "cf_xxx"
+zone_id              = "0123456789abcdef0123456789abcdef"
+host                 = "shop.exemple.com"
+path                 = "/drop"
+
+total_active_users       = 500
+new_users_per_minute     = 200
+session_duration_minutes = 15
+queueing_method          = "random"

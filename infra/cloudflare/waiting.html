@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Salle d'attente — Drop</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center;
+        background: hsl(240 10% 4%); color: hsl(0 0% 98%);
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      .card {
+        width: 100%; max-width: 28rem; margin: 1rem;
+        background: hsl(240 8% 7%); border: 1px solid hsl(240 4% 16%);
+        border-radius: 0.75rem; padding: 1.5rem;
+      }
+      .title { font-size: 1.125rem; font-weight: 600; margin: 0; }
+      .desc { color: hsl(240 5% 65%); font-size: 0.875rem; margin: 0.375rem 0 1.5rem; }
+      .label { text-align: center; color: hsl(240 5% 65%); font-size: 0.875rem; }
+      .value { text-align: center; font-size: 3rem; font-weight: 700; line-height: 1.1; }
+      .bar { height: 0.5rem; background: hsl(240 4% 14%); border-radius: 999px; overflow: hidden; margin: 1rem 0; }
+      .bar > i { display: block; height: 100%; width: 0; background: hsl(0 0% 98%); transition: width .5s ease; }
+      .foot { text-align: center; color: hsl(240 5% 65%); font-size: 0.75rem; margin-top: 1.25rem; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1 class="title">Salle d'attente</h1>
+      <p class="desc">Drop très demandé — accès régulé pour éviter la saturation.</p>
+      <div class="label">Temps d'attente estimé</div>
+      <div class="value" id="eta">…</div>
+      <div class="bar"><i id="bar"></i></div>
+      <p class="label" id="hint">Gardez cette page ouverte : vous serez admis automatiquement.</p>
+      <p class="foot">Powered by Waiting Room · Cloudflare edge (B)</p>
+    </main>
+
+    <script>
+      // Cloudflare serves this page while queued and answers the same URL with
+      // JSON when queried. On admission (inWaitingRoom=false) we reload; the
+      // edge then serves the real origin.
+      var maxWait = 0;
+      function fmt(min) {
+        if (!min || min <= 0) return "quelques instants";
+        return min < 1 ? "< 1 min" : "~" + Math.round(min) + " min";
+      }
+      async function poll() {
+        try {
+          var u = new URL(location.href);
+          u.searchParams.set("waitingroom_json", "1");
+          var r = await fetch(u.toString(), { cache: "no-store" });
+          var ct = r.headers.get("content-type") || "";
+          if (!ct.includes("application/json")) { location.reload(); return; }
+          var s = (await r.json()).cfWaitingRoom || {};
+          if (s.inWaitingRoom === false) { location.reload(); return; }
+          var w = s.waitTime || 0;
+          maxWait = Math.max(maxWait, w);
+          document.getElementById("eta").textContent = fmt(w);
+          var pct = maxWait > 0 ? Math.max(0, Math.min(100, (1 - w / maxWait) * 100)) : 0;
+          document.getElementById("bar").style.width = pct + "%";
+          setTimeout(poll, (s.refreshIntervalSeconds || 20) * 1000);
+        } catch (e) {
+          setTimeout(poll, 20000);
+        }
+      }
+      poll();
+    </script>
+  </body>
+</html>

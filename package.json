@@ -1,0 +1,42 @@
+{
+  "name": "waiting-room",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted virtual waiting room for high-demand drops — Bun + Hono + Redis with a Cloudflare Waiting Room alternative behind the same React UI. Rate-controlled admission, JWT passes, SSE, load-tested with k6.",
+  "keywords": [
+    "waiting-room",
+    "queue",
+    "rate-limiting",
+    "admission-control",
+    "token-bucket",
+    "bun",
+    "hono",
+    "redis",
+    "sse",
+    "cloudflare",
+    "terraform",
+    "react",
+    "k6",
+    "flash-sale",
+    "self-hosted"
+  ],
+  "scripts": {
+    "gate": "bun run src/gate.ts",
+    "gate:dev": "bun --watch src/gate.ts",
+    "admit": "bun run src/admit.ts",
+    "admit:dev": "bun --watch src/admit.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "hono": "^4.6.14",
+    "ioredis": "^5.11.1",
+    "jose": "^5.9.6",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# Browser verification artifacts
+.screens/
+.playwright-mcp/
+
+# Terraform
+infra/**/.terraform/
+infra/**/*.tfstate
+infra/**/*.tfstate.*
+infra/**/terraform.tfvars
+
+# OS
+.DS_Store
