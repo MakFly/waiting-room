@@ -1,75 +1,74 @@
-# Waiting Room — file d'attente virtuelle pour drops à forte demande
+# Waiting Room — virtual queue for high-demand drops
 
-> Salle d'attente virtuelle (virtual waiting room) qui empêche un site de tomber
-> pendant un drop : la foule est mise en file et admise à un **débit contrôlé**,
-> calibré sur la capacité réelle du site — comme le font Cloudflare Waiting Room
-> ou Queue-it, mais que tu héberges toi-même.
+> A virtual waiting room that keeps a site from falling over during a drop: the
+> crowd is queued and admitted at a **rate-controlled** pace, calibrated to the
+> site's real capacity — like Cloudflare Waiting Room or Queue-it, but self-hosted.
 
 `Bun` · `Hono` · `Redis` · `React` · `Vite` · `Tailwind` · `shadcn/ui` · `jose (JWT)` · `Terraform` · `Cloudflare` · `k6`
 
-File d'attente qui protège un site à forte demande (drop de stock limité) en
-n'admettant les visiteurs qu'à un **débit contrôlé** calibré sur la capacité
-réelle du site. Deux variantes **interchangeables** derrière **la même UI** :
+A queue that protects a high-demand site (limited-stock drop) by admitting visitors
+only at a **controlled throughput** calibrated to the site's real capacity. Two
+**interchangeable** variants behind **the same UI**:
 
-- **Variante A** — self-hosted **Bun + Hono + Redis** (on maîtrise tout).
-- **Variante B** — managée **Cloudflare Waiting Room** (file au edge).
+- **Variant A** — self-hosted **Bun + Hono + Redis** (full control).
+- **Variant B** — managed **Cloudflare Waiting Room** (queue at the edge).
 
-On bascule de l'une à l'autre via une seule variable (`VITE_WR_MODE`), sans
-toucher au code. Spec complète : voir [`PRD.md`](./PRD.md).
+Switch between them with a single variable (`VITE_WR_MODE`), no code change. Full
+spec: see [`PRD.md`](./PRD.md).
 
 ```
                        ┌───────────────── UI (React + Vite + Tailwind + shadcn) ──────────────┐
-                       │  useQueue(dropId) → QueueProvider (agnostique)                        │
-                       │        ├── selfProvider        (VITE_WR_MODE=self)        ── Variante A│
-                       │        └── cloudflareProvider  (VITE_WR_MODE=cloudflare)  ── Variante B│
+                       │  useQueue(dropId) → QueueProvider (agnostic)                          │
+                       │        ├── selfProvider        (VITE_WR_MODE=self)        ── Variant A │
+                       │        └── cloudflareProvider  (VITE_WR_MODE=cloudflare)  ── Variant B │
                        └──────────────────────────────────────────────────────────────────────┘
-  Variante A: Bun gate (:8787) + admit worker + Redis (infra-redis, prefix wr:)
-  Variante B: Cloudflare edge (Terraform) devant l'origine
+  Variant A: Bun gate (:8787) + admit worker + Redis (infra-redis, prefix wr:)
+  Variant B: Cloudflare edge (Terraform) in front of the origin
 ```
 
-## Prérequis
+## Requirements
 - Bun ≥ 1.3
-- Variante A : `infra-redis` joignable sur `localhost:6379` (aucune nouvelle infra Docker)
-- Variante B : un compte Cloudflare (zone active, plan Business+), Terraform
+- Variant A: `infra-redis` reachable on `localhost:6379` (no new Docker infra)
+- Variant B: a Cloudflare account (active zone, Business+ plan), Terraform
 
 ---
 
-## Variante A — Bun + Hono + Redis
+## Variant A — Bun + Hono + Redis
 
 ### Setup
 ```bash
-cp .env.example .env       # ajuster WR_JWT_SECRET / WR_ADMIN_TOKEN en prod
+cp .env.example .env       # set WR_JWT_SECRET / WR_ADMIN_TOKEN in production
 bun install
 ```
 
-### Lancer (2 process)
+### Run (2 processes)
 ```bash
-WR_DROP_ID=sneaker-drop bun run gate    # gatekeeper HTTP  :8787
-WR_DROP_ID=sneaker-drop bun run admit   # worker d'admission (débit, singleton via lock Redis)
+WR_DROP_ID=sneaker-drop bun run gate    # HTTP gatekeeper  :8787
+WR_DROP_ID=sneaker-drop bun run admit   # admission worker (throughput, singleton via Redis lock)
 ```
 
-### Flux (curl)
+### Flow (curl)
 ```bash
 B=http://localhost:8787 D=sneaker-drop
-curl -s -c c.txt -X POST $B/api/$D/enqueue                  # → { position, ticket }  (cookie wr_ticket)
+curl -s -c c.txt -X POST $B/api/$D/enqueue                  # → { position, ticket }  (wr_ticket cookie)
 curl -s -b c.txt $B/api/$D/status                           # → waiting | { admitted, pass }
-curl -s -H "Authorization: Bearer <pass>" $B/api/$D/site    # route "site réel" protégée
+curl -s -H "Authorization: Bearer <pass>" $B/api/$D/site    # protected "real site" route
 ```
 
-### Modèle
-- **Occupation = taille du set `admitted`** (porteurs d'un pass vivant). Admission
-  bornée par `capacity`, jamais dépassée (garanti par un unique script Lua).
-- **Débit** : token bucket Lua à `ratePerMin` (burst = 1 min).
-- **Expiration** : `ZREMRANGEBYSCORE` auto-répare la capacité ; `release` libère tôt.
-- **Anti-triche** : ticket + pass signés (`jose`, HS256). `require-pass` vérifie
-  le JWT **et** l'appartenance à `admitted` (révocation immédiate au release).
-- **Équité** : `method=lottery` mélange les arrivées d'une **fenêtre temporelle**
-  (aucun avantage à être quelques ms plus tôt ; anti-spam refresh).
-- **Anti-bot** : **rate-limit par IP** sur `/enqueue` (token bucket Lua) qui plafonne
-  le nombre de tickets qu'un client peut créer → pas de farming de tickets lottery.
-- **Isolation Redis** : toutes les clés sous le préfixe `wr:` (jamais `pulseops:*`).
+### Model
+- **Occupancy = size of the `admitted` set** (holders of a live pass). Admission is
+  bounded by `capacity` and never exceeds it (guaranteed by a single Lua script).
+- **Throughput**: Lua token bucket at `ratePerMin` (burst = 1 minute).
+- **Expiry**: `ZREMRANGEBYSCORE` self-heals capacity; `release` frees a slot early.
+- **Anti-tamper**: signed ticket + pass (`jose`, HS256). `require-pass` checks the
+  JWT **and** membership in `admitted` (immediate revocation on release).
+- **Fairness**: `method=lottery` shuffles arrivals within a **time window** (being a
+  few ms earlier gives no edge; anti refresh-spam).
+- **Anti-bot**: **per-IP rate limit** on `/enqueue` (Lua token bucket) that caps how
+  many tickets one client can create → no farming of lottery entries.
+- **Redis isolation**: all keys under the `wr:` prefix (never `pulseops:*`).
 
-### Réglage à chaud (ops)
+### Hot config (ops)
 ```bash
 curl -s -H "Authorization: Bearer $WR_ADMIN_TOKEN" $B/api/$D/admin/state
 curl -s -X PUT -H "Authorization: Bearer $WR_ADMIN_TOKEN" \
@@ -79,100 +78,99 @@ curl -s -X PUT -H "Authorization: Bearer $WR_ADMIN_TOKEN" \
 
 ---
 
-## Variante B — Cloudflare Waiting Room
+## Variant B — Cloudflare Waiting Room
 
-La file est appliquée **au edge**, devant l'origine. L'origine (le « site réel »,
-qui peut rester le service Bun/Hono) n'a **aucune logique de file** à gérer.
+The queue is enforced **at the edge**, in front of the origin. The origin (the
+"real site", which can stay the Bun/Hono service) has **no queue logic** to run.
 
 ```bash
 cd infra/cloudflare
-cp terraform.tfvars.example terraform.tfvars   # renseigner token / zone / host
+cp terraform.tfvars.example terraform.tfvars   # fill in token / zone / host
 terraform init
 terraform apply
 ```
 
-Les deux boutons (`total_active_users` = C, `new_users_per_minute` = λ) et la page
-d'attente (`waiting.html`, même esthétique, poll du JSON) sont dans `infra/cloudflare/`.
-Réglage à chaud : `terraform apply` avec de nouvelles valeurs, ou l'API Cloudflare.
+The two knobs (`total_active_users` = C, `new_users_per_minute` = λ) and the
+waiting page (`waiting.html`, same look, JSON polling) live in `infra/cloudflare/`.
+Retune live with a new `terraform apply` or the Cloudflare API.
 
 ---
 
-## Basculer A ↔ B (UI)
+## Switching A ↔ B (UI)
 
-L'UI est identique dans les deux modes ; seul le provider change.
+The UI is identical in both modes; only the provider changes.
 
 ```bash
 cd web
 cp .env.example .env
-# VITE_WR_MODE=self        → Variante A (SSE + REST, position exacte)
-# VITE_WR_MODE=cloudflare  → Variante B (poll JSON edge, temps d'attente estimé)
+# VITE_WR_MODE=self        → Variant A (SSE + REST, exact position)
+# VITE_WR_MODE=cloudflare  → Variant B (edge JSON polling, estimated wait time)
 bun install
-bun run dev                # http://localhost:5173  (proxy /api → :8787 en mode self)
+bun run dev                # http://localhost:5173  (proxies /api → :8787 in self mode)
 ```
 
-En mode `self`, le front parle au gate Bun via le proxy Vite (cookies + SSE
-same-origin). En mode `cloudflare`, il poll l'endpoint `?waitingroom_json=1` servi
-par l'edge (Cloudflare ne divulgue pas la position exacte, seulement un ETA — l'UI
-s'adapte et affiche le temps d'attente).
+In `self` mode the frontend talks to the Bun gate through the Vite proxy (cookies +
+SSE same-origin). In `cloudflare` mode it polls the `?waitingroom_json=1` endpoint
+served by the edge (Cloudflare does not expose an exact position, only an ETA — the
+UI adapts and shows the wait time).
 
 ---
 
-## Calibrer la capacité `C` — test de charge k6
+## Calibrating capacity `C` — k6 load test
 
-Le débit n'est pas un chiffre magique : `C` se **mesure** sur le vrai point de
-rupture du site réel, et `ratePerMin ≈ C / durée_de_session` (loi de Little).
+Throughput is not a magic number: `C` is **measured** at the real site's breaking
+point, and `ratePerMin ≈ C / session_duration` (Little's Law).
 
-**1) Trouver C** — on rampe la charge sur le **site réel** (pas la file) et on
-regarde où p99 / taux d'erreur décrochent. Le genou moins ~30-40 % de marge = C.
+**1) Find C** — ramp load against the **real site** (not the queue) and watch where
+p99 / error rate break past your SLO. The knee minus ~30-40% margin = C.
 ```bash
-TARGET=https://shop.exemple.com/checkout k6 run load/k6-capacity.js
-# le plus haut palier VU où http_req_duration p99 < budget et http_req_failed ≈ 0 → C
+TARGET=https://shop.example.com/checkout k6 run load/k6-capacity.js
+# highest VU stage where http_req_duration p99 < budget and http_req_failed ≈ 0 → C
 ```
 
-**2) Vérifier que la file tient** — on simule une foule (2000 visiteurs) sur le
-gate (variante A) : chacun enqueue puis poll jusqu'à admission.
+**2) Verify the queue holds** — simulate a crowd (2000 visitors) against the gate
+(variant A): each one enqueues then polls until admitted.
 ```bash
 BASE=http://localhost:8787 DROP=sneaker-drop k6 run load/k6-flashcrowd.js
-# pendant le run, l'occupation ne doit jamais dépasser capacity :
+# during the run, occupancy must never exceed capacity:
 curl -H "Authorization: Bearer $WR_ADMIN_TOKEN" \
   http://localhost:8787/api/sneaker-drop/admin/state
 ```
 
-> Le goulot réel est souvent le **pool de connexions Postgres** ou le **rate-limit
-> du prestataire de paiement**, pas le CPU. Calibre `C` sur ce goulot.
+> The real bottleneck is often the **Postgres connection pool** or the **payment
+> provider's rate limit**, not CPU. Calibrate `C` against that bottleneck.
 
 ---
 
 ## Tests
 ```bash
-bun test    # tokens, idempotence enqueue, "jamais > capacity", release, status
+bun test    # tokens, enqueue idempotency, never-exceed-capacity, release, status, rate limit
 ```
 
 ## Structure
 ```
-src/            # Variante A (backend) : gate.ts, admit.ts, queue/, lib/, middleware/
-web/            # UI React/Vite/Tailwind/shadcn + queue/ providers (self | cloudflare)
-infra/cloudflare/  # Variante B : Terraform + waiting.html
-load/           # k6 : k6-capacity.js (calibrer C) · k6-flashcrowd.js (charge file)
-PRD.md          # spec produit complète (A et B)
+src/            # Variant A (backend): gate.ts, admit.ts, queue/, lib/, middleware/
+web/            # React/Vite/Tailwind/shadcn UI + queue/ providers (self | cloudflare)
+infra/cloudflare/  # Variant B: Terraform + waiting.html
+load/           # k6: k6-capacity.js (calibrate C) · k6-flashcrowd.js (crowd the gate)
+PRD.md          # full product spec (A and B)
 ```
 
 ---
 
-## Mots-clés / topics (SEO)
+## Keywords / topics (SEO)
 
-Virtual waiting room · file d'attente virtuelle · queue system · traffic surge ·
-flash sale · product drop · sneaker drop · ticketing queue · rate limiting ·
-token bucket · admission control · backpressure · Little's Law · Redis queue ·
-Bun · Hono · Server-Sent Events (SSE) · Cloudflare Waiting Room · Terraform ·
-React · Tailwind · shadcn/ui · load testing · k6 · DDoS-resilient · self-hosted.
+Virtual waiting room · queue system · traffic surge · flash sale · product drop ·
+sneaker drop · ticketing queue · rate limiting · token bucket · admission control ·
+backpressure · Little's Law · Redis queue · Bun · Hono · Server-Sent Events (SSE) ·
+Cloudflare Waiting Room · Terraform · React · Tailwind · shadcn/ui · load testing ·
+k6 · DDoS-resilient · self-hosted.
 
-**Repo description (une ligne)** :
+**Repo description (one-liner)**:
 > Self-hosted virtual waiting room for high-demand drops — Bun + Hono + Redis with
 > a Cloudflare Waiting Room alternative behind the same React UI. Rate-controlled
 > admission, JWT passes, SSE, load-tested with k6.
 
-**Topics GitHub suggérés** : `waiting-room` `queue` `rate-limiting` `bun` `hono`
+**Suggested GitHub topics**: `waiting-room` `queue` `rate-limiting` `bun` `hono`
 `redis` `sse` `cloudflare` `terraform` `react` `tailwindcss` `shadcn-ui` `k6`
 `load-testing` `admission-control` `token-bucket` `flash-sale` `self-hosted`.
-
